@@ -8,14 +8,17 @@ from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
+from openai import AsyncOpenAI
 
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 dp = Dispatcher(storage=MemoryStorage())
 
+client = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
-# Главное меню
+
 main_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🚀 Найти способ заработать")],
@@ -26,8 +29,6 @@ main_menu = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-
-# Вопросы анкеты
 goal_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="💰 20 000 ₽")],
@@ -39,7 +40,6 @@ goal_menu = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-
 time_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="⏱ До 1 часа")],
@@ -49,7 +49,6 @@ time_menu = ReplyKeyboardMarkup(
     ],
     resize_keyboard=True
 )
-
 
 resources_menu = ReplyKeyboardMarkup(
     keyboard=[
@@ -61,7 +60,6 @@ resources_menu = ReplyKeyboardMarkup(
     ],
     resize_keyboard=True
 )
-
 
 format_menu = ReplyKeyboardMarkup(
     keyboard=[
@@ -80,14 +78,32 @@ class EarningForm(StatesGroup):
     format = State()
 
 
+async def ask_ai(prompt: str) -> str:
+    if not client:
+        return (
+            "⚠️ AI пока не подключён.\n\n"
+            "Добавь переменную OPENAI_API_KEY в настройках RelaxDev."
+        )
+
+    try:
+        response = await client.responses.create(
+            model="gpt-5.6-luna",
+            input=prompt
+        )
+        return response.output_text
+    except Exception as e:
+        logging.exception("AI error")
+        return f"❌ Ошибка AI: {str(e)}"
+
+
 @dp.message(CommandStart())
 async def start(message: Message, state: FSMContext):
     await state.clear()
 
     await message.answer(
         "🤖 <b>AI ЗАРАБОТОК</b>\n\n"
-        "Я помогу найти подходящий способ заработка "
-        "с учётом твоей цели, времени и возможностей.\n\n"
+        "Я помогу найти реальные способы заработка "
+        "под твои возможности.\n\n"
         "Выбери действие 👇",
         reply_markup=main_menu
     )
@@ -144,33 +160,58 @@ async def get_format(message: Message, state: FSMContext):
     data = await state.get_data()
     await state.clear()
 
+    await message.answer("🤖 Анализирую твои возможности...")
+
+    prompt = f"""
+Ты — эксперт по поиску способов заработка.
+
+Данные пользователя:
+Цель: {data['goal']}
+Время: {data['time']}
+Ресурсы: {data['resources']}
+Формат: {data['format']}
+
+Подбери 3 конкретных способа заработка.
+
+Для каждого обязательно укажи:
+1. Название
+2. Что именно делать
+3. Реалистичный потенциальный доход
+4. Сколько нужно денег для старта
+5. Где искать клиентов
+6. Первые 3 шага
+7. Главные риски
+
+Не предлагай абстрактные советы вроде "займись фрилансом".
+Предложения должны быть реально выполнимыми с указанными ресурсами.
+
+Ответ на русском языке.
+"""
+
+    result = await ask_ai(prompt)
+
     await message.answer(
-        "🔎 <b>Анкета заполнена!</b>\n\n"
-        f"🎯 Цель: {data['goal']}\n"
-        f"⏱ Время: {data['time']}\n"
-        f"🛠 Возможности: {data['resources']}\n"
-        f"🌐 Формат: {data['format']}\n\n"
-        "🤖 Теперь подключим AI и он подберёт "
-        "3 подходящих способа заработка.",
+        "🎯 <b>Вот что я нашёл:</b>\n\n" + result,
         reply_markup=main_menu
     )
 
 
 @dp.message(F.text == "💡 Разобрать мою идею")
-async def idea(message: Message):
+async def idea(message: Message, state: FSMContext):
+    await state.clear()
+
     await message.answer(
         "💡 Напиши свою идею заработка одним сообщением.\n\n"
         "Например:\n"
-        "«Хочу делать Telegram-ботов и продавать их бизнесу»"
+        "Хочу делать Telegram-ботов и продавать их бизнесу."
     )
 
 
 @dp.message(F.text == "📋 Мой план")
 async def plan(message: Message):
     await message.answer(
-        "📋 <b>Твой план</b>\n\n"
-        "Пока план не создан.\n"
-        "Пройди 🚀 «Найти способ заработать»."
+        "📋 <b>Мой план</b>\n\n"
+        "Система сохранения планов будет добавлена следующим этапом."
     )
 
 
@@ -183,13 +224,53 @@ async def profile(message: Message):
     )
 
 
+@dp.message()
+async def free_text(message: Message):
+    if not client:
+        await message.answer(
+            "⚠️ AI пока не подключён.\n\n"
+            "Добавь OPENAI_API_KEY в RelaxDev."
+        )
+        return
+
+    await message.answer("🤖 Анализирую...")
+
+    prompt = f"""
+Пользователь предложил идею заработка:
+
+{message.text}
+
+Проанализируй её как бизнес-идею.
+
+Дай:
+💰 Потенциал заработка
+📈 Спрос
+💸 Стартовые расходы
+🎯 Кто клиент
+🔎 Где искать клиентов
+⚠️ Риски
+🚀 Как запустить
+🔥 Что изменить, чтобы повысить шансы на успех
+
+Будь конкретным и честным.
+Ответ на русском языке.
+"""
+
+    result = await ask_ai(prompt)
+
+    await message.answer(
+        "💡 <b>Разбор идеи</b>\n\n" + result,
+        reply_markup=main_menu
+    )
+
+
 async def main():
     if not BOT_TOKEN:
         raise ValueError("BOT_TOKEN не найден!")
 
     bot = Bot(token=BOT_TOKEN)
 
-    print("🤖 AI Заработок запущен!")
+    logging.info("🤖 AI Заработок запущен!")
 
     await dp.start_polling(bot)
 
